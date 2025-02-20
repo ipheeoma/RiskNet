@@ -8,6 +8,9 @@
 (define-constant ERR_PREVIOUS_PARTICIPATION (err u4))
 (define-constant ERR_DEADLINE_PASSED (err u5))
 (define-constant ERR_SEQUENTIAL_UPDATE (err u6))
+(define-constant ERR_INVALID_INPUT (err u7))
+(define-constant ERR_ZERO_AMOUNT (err u8))
+(define-constant ERR_ID_NOT_FOUND (err u9))
 
 ;; Manual Block Height Tracking
 (define-data-var ledger_position uint u0)
@@ -71,6 +74,25 @@
 ;; Voting period constants
 (define-constant DECISION_WINDOW u144) ;; Approximately 24 hours 
 (define-constant COVERAGE_DURATION u1440) ;; Approximately 10 days
+(define-constant MAX_COMPENSATION_AMOUNT u1000000000) ;; Maximum compensation amount
+
+;; Validation helper functions
+(define-read-only (is_valid_incident_id (id uint))
+    (is-some (map-get? incident_log {incident_id: id}))
+)
+
+(define-read-only (is_valid_service (service principal))
+    ;; Validate that service is not the contract itself or zero address
+    (and 
+        (not (is-eq service (as-contract tx-sender)))
+        (not (is-eq service 'SP000000000000000000002Q6VF78))
+    )
+)
+
+(define-read-only (is_valid_amount (amount uint))
+    ;; Check that amount is reasonable (greater than 0 and less than max)
+    (and (> amount u0) (<= amount MAX_COMPENSATION_AMOUNT))
+)
 
 ;; Member contribution function
 (define-public (deposit_funds (payment_amount uint))
@@ -79,6 +101,9 @@
             (current_position (var-get ledger_position))
         )
         (begin
+            ;; Validate input
+            (asserts! (is_valid_amount payment_amount) ERR_INVALID_INPUT)
+            
             ;; Ensure minimum contribution
             (asserts! (> payment_amount u0) ERR_FUNDING_REQUIRED)
 
@@ -122,6 +147,9 @@
             )
             (decision_deadline (+ current_position DECISION_WINDOW))
         )
+        ;; Validate inputs
+        (asserts! (is_valid_service affected_service) ERR_INVALID_INPUT)
+        (asserts! (is_valid_amount compensation_amount) ERR_ZERO_AMOUNT)
 
         ;; Ensure member has active coverage
         (asserts! (get protection_active participant_record) ERR_ACCESS_DENIED)
@@ -135,7 +163,7 @@
             ERR_DEADLINE_PASSED
         )
 
-        ;; Create claim
+        ;; Create claim with validated data
         (map-set incident_log 
             {incident_id: incident_id}
             {
@@ -164,6 +192,7 @@
     (let 
         (
             (current_position (var-get ledger_position))
+            (validated_id (asserts! (is_valid_incident_id incident_id) ERR_ID_NOT_FOUND))
             (incident_record 
                 (unwrap! 
                     (map-get? incident_log {incident_id: incident_id}) 
@@ -189,7 +218,7 @@
             ERR_PREVIOUS_PARTICIPATION
         )
 
-        ;; Update votes
+        ;; Update votes with validated data
         (map-set incident_log 
             {incident_id: incident_id}
             (merge incident_record 
@@ -203,7 +232,7 @@
             )
         )
 
-        ;; Track individual member votes
+        ;; Track individual member votes with validated data
         (map-set ballot_record 
             {participant: tx-sender, incident_id: incident_id}
             {ballot_cast: true}
@@ -213,7 +242,7 @@
     )
 )
 
-;; Read-only function to get current block height
-(define-read-only (get_ledger_position)
-    (var-get ledger_position)
+;; Read-only function to get the current ledger height
+(define-read-only (fetch_chain_position)
+  (var-get ledger_position)
 )
